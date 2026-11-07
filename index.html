@@ -42,6 +42,14 @@
       box-shadow: 0 0 30px #00ff88;
     }
 
+    .btn-toggle.colorato {
+      border-color: var(--tinta);
+      background-color: color-mix(in srgb, var(--tinta) 22%, #000);
+      color: var(--tinta);
+      box-shadow: 0 0 30px var(--tinta);
+      font-size: 18px;
+    }
+
     #debug-text {
       margin-top: 24px;
     }
@@ -66,6 +74,9 @@
         height: 300px;
         font-size: 28px;
       }
+      .btn-toggle.colorato {
+        font-size: 22px;
+      }
       #quest-xr-btn {
         display: none !important;
       }
@@ -88,12 +99,29 @@
 
     const LAYER_SIZE = 512;
     const PINCH_BUTTON = 0;
+    const SINISTRA_BUTTON = 5;
+    const DESTRA_BUTTON = 6;
+    const COLORI = [
+      { nome: 'ROSSO', hue: 0, css: '#ff2a2a' },
+      { nome: 'ARANCIONE', hue: 30, css: '#ff8a00' },
+      { nome: 'GIALLO', hue: 55, css: '#ffe14a' },
+      { nome: 'VERDE', hue: 120, css: '#3dff6a' },
+      { nome: 'AZZURRO', hue: 190, css: '#3de4ff' },
+      { nome: 'BLU', hue: 240, css: '#4d6dff' },
+      { nome: 'VIOLA', hue: 280, css: '#b44dff' },
+      { nome: 'ROSA', hue: 330, css: '#ff4da6' }
+    ];
 
     let audioCtx = null;
     let is_on = false;
+    let coloreIndice = null;
     let pinchTenuto = false;
+    let sinistraTenuta = false;
+    let destraTenuta = false;
     let invioInCorso = false;
     let statoRichiesto = null;
+    let invioColore = false;
+    let coloreRichiesto = null;
     let quest_xr_session = null;
     let layerError = null;
 
@@ -131,11 +159,41 @@
       };
     }
 
+    function tintaScelta() {
+      if (!is_on || coloreIndice === null) return null;
+      return COLORI[coloreIndice];
+    }
+
+    function indiceVicino(hue) {
+      let migliore = 0;
+      let distanza = 360;
+      COLORI.forEach((colore, indice) => {
+        let delta = Math.abs(colore.hue - hue) % 360;
+        if (delta > 180) delta = 360 - delta;
+        if (delta < distanza) {
+          distanza = delta;
+          migliore = indice;
+        }
+      });
+      return migliore;
+    }
+
     function applica(acceso) {
       is_on = !!acceso;
-      toggleButton.classList.toggle('state-on', is_on);
-      toggleButton.textContent = is_on ? 'ON' : 'OFF';
-      debugText.textContent = is_on ? 'Stato: ATTIVO' : 'Stato: DISATTIVATO';
+      const tinta = tintaScelta();
+      toggleButton.classList.toggle('state-on', is_on && !tinta);
+      toggleButton.classList.toggle('colorato', !!tinta);
+      if (tinta) {
+        toggleButton.style.setProperty('--tinta', tinta.css);
+        toggleButton.textContent = tinta.nome;
+        debugText.textContent = 'Sinistra e destra per il colore';
+      } else {
+        toggleButton.style.removeProperty('--tinta');
+        toggleButton.textContent = is_on ? 'ON' : 'OFF';
+        debugText.textContent = is_on
+          ? 'Sinistra e destra per il colore'
+          : 'Stato: DISATTIVATO';
+      }
       if (quadLayer) {
         drawButtonCanvas();
         textureDirty = true;
@@ -153,6 +211,7 @@
         const res = await fetch(url);
         if (!res.ok) throw new Error('stato');
         const data = await res.json();
+        if (data.colorMode === 'hs' && data.sat >= 50) coloreIndice = indiceVicino(data.hue);
         applica(data.on);
       } catch (err) {
         luciNonRaggiunte();
@@ -214,14 +273,58 @@
       }
     }
 
+    async function inviaColore(colore) {
+      if (!ponte.bridge) return;
+      coloreRichiesto = colore;
+      if (invioColore) return;
+      invioColore = true;
+      try {
+        while (coloreRichiesto) {
+          const richiesto = coloreRichiesto;
+          coloreRichiesto = null;
+          try {
+            const res = await fetch(ponte.bridge + '/color', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ hue: richiesto.hue, sat: 100, k: ponte.key })
+            });
+            if (!res.ok && !coloreRichiesto) luciNonRaggiunte();
+          } catch (err) {
+            if (!coloreRichiesto) luciNonRaggiunte();
+          }
+        }
+      } finally {
+        invioColore = false;
+      }
+    }
+
+    function cambiaColore(passo) {
+      if (!is_on) return;
+      const totale = COLORI.length;
+      coloreIndice = coloreIndice === null
+        ? (passo > 0 ? 0 : totale - 1)
+        : (coloreIndice + passo + totale) % totale;
+      applica(true);
+      inviaColore(COLORI[coloreIndice]);
+    }
+
     toggleButton.addEventListener('click', cambiaStato);
 
     window.addEventListener('keydown', (e) => {
       if (e.repeat) return;
-      if (e.key !== 'Enter' && e.key !== ' ') return;
       if (e.target === xrButton) return;
-      e.preventDefault();
-      cambiaStato();
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        cambiaStato();
+        return;
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        cambiaColore(1);
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        cambiaColore(-1);
+      }
     });
 
     function drawButtonCanvas() {
@@ -229,16 +332,28 @@
       ctx.clearRect(0, 0, LAYER_SIZE, LAYER_SIZE);
       ctx.beginPath();
       ctx.arc(256, 256, 200, 0, Math.PI * 2);
-      ctx.fillStyle = is_on ? 'rgba(0, 51, 17, 0.88)' : 'rgba(51, 10, 10, 0.88)';
+      const tinta = tintaScelta();
+      const tratto = tinta ? tinta.css : (is_on ? '#00ff88' : '#ff4444');
+      const canale = Number.parseInt(tratto.slice(1), 16);
+      ctx.fillStyle = 'rgba('
+        + (((canale >> 16) & 255) * 0.16 | 0) + ','
+        + (((canale >> 8) & 255) * 0.16 | 0) + ','
+        + ((canale & 255) * 0.16 | 0) + ',0.9)';
       ctx.fill();
       ctx.lineWidth = 16;
-      ctx.strokeStyle = is_on ? '#00ff88' : '#ff4444';
+      ctx.strokeStyle = tratto;
       ctx.stroke();
-      ctx.fillStyle = is_on ? '#00ff88' : '#ff4444';
-      ctx.font = 'bold 72px sans-serif';
+      ctx.fillStyle = tratto;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(is_on ? 'ON' : 'OFF', 256, 256);
+      const etichetta = tinta ? tinta.nome : (is_on ? 'ON' : 'OFF');
+      let size = etichetta.length > 4 ? 52 : 72;
+      ctx.font = 'bold ' + size + 'px sans-serif';
+      while (ctx.measureText(etichetta).width > 340 && size > 32) {
+        size -= 4;
+        ctx.font = 'bold ' + size + 'px sans-serif';
+      }
+      ctx.fillText(etichetta, 256, 256);
     }
 
     function compileShader(type, source) {
@@ -379,7 +494,7 @@
       session.addEventListener('end', onXRSessionEnded);
       setupQuadLayer(session).then(() => {
         xrButton.style.display = 'none';
-        debugText.textContent = 'HUD sul quad layer, a un metro dagli occhi. Pinch per accendere o spegnere.';
+        debugText.textContent = 'HUD sul quad layer. Pinch accende, sinistra e destra cambiano colore.';
         session.requestAnimationFrame(onXRFrame);
       }).catch((err) => {
         layerError = 'Layer Quest non avviato: ' + (err && err.message ? err.message : err);
@@ -393,6 +508,8 @@
       quadLayer = null;
       textureDirty = false;
       pinchTenuto = false;
+      sinistraTenuta = false;
+      destraTenuta = false;
       xrButton.style.display = 'block';
       debugText.textContent = layerError || 'Sessione Quest chiusa. Puoi rientrare.';
       layerError = null;
@@ -404,12 +521,21 @@
       session.requestAnimationFrame(onXRFrame);
 
       let pinch = false;
+      let sinistra = false;
+      let destra = false;
       for (const inputSource of session.inputSources) {
-        const button = inputSource.hand && inputSource.gamepad && inputSource.gamepad.buttons[PINCH_BUTTON];
-        if (button && button.pressed) pinch = true;
+        const buttons = inputSource.hand && inputSource.gamepad && inputSource.gamepad.buttons;
+        if (!buttons) continue;
+        if (buttons[PINCH_BUTTON] && buttons[PINCH_BUTTON].pressed) pinch = true;
+        if (buttons[SINISTRA_BUTTON] && buttons[SINISTRA_BUTTON].pressed) sinistra = true;
+        if (buttons[DESTRA_BUTTON] && buttons[DESTRA_BUTTON].pressed) destra = true;
       }
       if (pinch && !pinchTenuto) cambiaStato();
+      if (destra && !destraTenuta) cambiaColore(1);
+      if (sinistra && !sinistraTenuta) cambiaColore(-1);
       pinchTenuto = pinch;
+      destraTenuta = destra;
+      sinistraTenuta = sinistra;
 
       if (quadLayer && (textureDirty || quadLayer.needsRedraw)) {
         paintQuad(frame);

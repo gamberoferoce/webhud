@@ -294,11 +294,17 @@ def nanoleaf_call(config, method, path, payload=None):
             raise
 
 
-def nanoleaf_on(config):
-    status, body = nanoleaf_call(config, "GET", "/state/on")
+def nanoleaf_state(config):
+    status, body = nanoleaf_call(config, "GET", "/state")
     if status != 200:
         raise RuntimeError("lettura %s" % status)
-    return bool(json.loads(body.decode("utf-8")).get("value"))
+    data = json.loads(body.decode("utf-8"))
+    return {
+        "on": bool(data.get("on", {}).get("value")),
+        "hue": int(data.get("hue", {}).get("value") or 0),
+        "sat": int(data.get("sat", {}).get("value") or 0),
+        "colorMode": data.get("colorMode") or "",
+    }
 
 
 def nanoleaf_set(config, acceso):
@@ -306,6 +312,20 @@ def nanoleaf_set(config, acceso):
     if status not in (200, 204):
         raise RuntimeError("scrittura %s" % status)
     return bool(acceso)
+
+
+def nanoleaf_color(config, hue, sat):
+    tinta = int(hue) % 360
+    saturazione = max(0, min(100, int(sat)))
+    status, _body = nanoleaf_call(
+        config,
+        "PUT",
+        "/state",
+        {"hue": {"value": tinta}, "sat": {"value": saturazione}},
+    )
+    if status not in (200, 204):
+        raise RuntimeError("colore %s" % status)
+    return {"hue": tinta, "sat": saturazione}
 
 
 def chiave_valida(config, data, query):
@@ -370,12 +390,13 @@ def make_handler(config):
                 self.send_json(503, {"error": "non accoppiato"})
                 return
             try:
-                self.send_json(200, {"on": nanoleaf_on(config)})
+                self.send_json(200, nanoleaf_state(config))
             except Exception as err:
                 self.send_json(502, {"error": str(err)})
 
         def do_POST(self):
-            if self.path.split("?", 1)[0] != "/toggle":
+            path = self.path.split("?", 1)[0]
+            if path not in ("/toggle", "/color"):
                 self.send_json(404, {"error": "non trovato"})
                 return
             try:
@@ -389,15 +410,21 @@ def make_handler(config):
             if not config.get("token") or not config.get("host"):
                 self.send_json(503, {"error": "non accoppiato"})
                 return
-            if "on" not in data:
-                self.send_json(400, {"error": "manca on"})
-                return
             try:
-                acceso = nanoleaf_set(config, data["on"])
+                if path == "/toggle":
+                    if "on" not in data:
+                        self.send_json(400, {"error": "manca on"})
+                        return
+                    self.send_json(200, {"on": nanoleaf_set(config, data["on"])})
+                    return
+                if "hue" not in data:
+                    self.send_json(400, {"error": "manca hue"})
+                    return
+                self.send_json(200, nanoleaf_color(config, data["hue"], data.get("sat", 100)))
+            except (TypeError, ValueError):
+                self.send_json(400, {"error": "colore"})
             except Exception as err:
                 self.send_json(502, {"error": str(err)})
-                return
-            self.send_json(200, {"on": acceso})
 
     return Handler
 
