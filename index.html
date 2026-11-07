@@ -107,6 +107,11 @@
     let buttonCtx = null;
     let textureDirty = false;
 
+    const PONTE_PUBBLICO = {
+      bridge: 'https://predict-kind-congressional-prime.trycloudflare.com',
+      key: 'vOSKiOKp8mDz_WNQR7o9by4R'
+    };
+
     const ponte = leggiPonte();
 
     function leggiPonte() {
@@ -120,8 +125,8 @@
         history.replaceState(null, '', location.pathname + (resto ? '?' + resto : '') + location.hash);
       }
       return {
-        bridge: (localStorage.getItem('nanoleafBridge') || '').replace(/\/+$/, ''),
-        key: localStorage.getItem('nanoleafKey') || ''
+        bridge: (localStorage.getItem('nanoleafBridge') || PONTE_PUBBLICO.bridge).replace(/\/+$/, ''),
+        key: localStorage.getItem('nanoleafKey') || PONTE_PUBBLICO.key
       };
     }
 
