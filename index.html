@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Universal HUD Button</title>
+  <style>
+    /* --- STILE BASE: PC Desktop e Smartphone --- */
+    body {
+      margin: 0;
+      background-color: #121212;
+      color: #ffffff;
+      font-family: system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    #hud-container {
+      text-align: center;
+    }
+
+    /* Il Bottone a Due Stati */
+    .btn-toggle {
+      width: 200px;
+      height: 200px;
+      border-radius: 50%;
+      border: 8px solid #333;
+      background-color: #222;
+      color: #ff4444;
+      font-size: 24px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    }
+
+    /* Stato ATTIVO (ON) */
+    .btn-toggle.state-on {
+      border-color: #00ff88;
+      background-color: #003311;
+      color: #00ff88;
+      box-shadow: 0 0 30px #00ff88;
+    }
+
+    #quest-xr-btn {
+      margin-top: 30px;
+      padding: 12px 24px;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      display: none; /* Visibile solo se rileva supporto WebXR (Quest) */
+    }
+
+    /* --- STILE SPECIFICO: Meta Ray-Ban Display (600x600) --- */
+    @media (max-width: 600px) and (max-height: 600px) and (aspect-ratio: 1/1) {
+      body {
+        background-color: #000000; /* Nero assoluto = Trasparente sulle lenti */
+      }
+      .btn-toggle {
+        width: 300px; /* Più grande e centrato per l'HUD degli occhiali */
+        height: 300px;
+      }
+      #quest-xr-btn {
+        display: none !important; /* Inutile sugli occhiali */
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div id="hud-container">
+    <button id="toggle-button" class="btn-toggle">OFF</button>
+    <p id="debug-text">Swipe in avanti del pollice per cambiare stato</p>
+  </div>
+
+  <!-- Pulsante di attivazione AR (Appare solo su Meta Quest) -->
+  <button id="quest-xr-btn">ENTRA IN MODALITÀ QUEST HUD (AR)</button>
+
+  <script>
+    const toggleButton = document.getElementById('toggle-button');
+    const debugText = document.getElementById('debug-text');
+    const xrButton = document.getElementById('quest-xr-btn');
+
+    const LAYER_SIZE = 512;
+
+    let is_on = false;
+    let quest_xr_session = null;
+    let layerError = null;
+
+    let gl = null;
+    let xrGlBinding = null;
+    let quadLayer = null;
+    let framebuffer = null;
+    let buttonTexture = null;
+    let quadProgram = null;
+    let quadVao = null;
+    let buttonCanvas = null;
+    let buttonCtx = null;
+    let textureDirty = false;
+    let gia_in_gesto = false;
+
+    // oculus-hand: 0 pinch, 5 sinistra, 6 destra, 7 swipe-forward, 8 indietro, 9 tap.
+    const SWIPE_FORWARD_BUTTON = 7;
+
+    function cambiaStato() {
+      is_on = !is_on;
+      if (is_on) {
+        toggleButton.classList.add('state-on');
+        toggleButton.innerText = 'ON';
+        debugText.innerText = 'Stato: ATTIVO';
+      } else {
+        toggleButton.classList.remove('state-on');
+        toggleButton.innerText = 'OFF';
+        debugText.innerText = 'Stato: DISATTIVATO';
+      }
+      if (quadLayer) {
+        drawButtonCanvas();
+        textureDirty = true;
+      }
+    }
+
+    toggleButton.addEventListener('click', cambiaStato);
+
+    // Sugli occhiali la microgesture forward della Neural Band arriva come ArrowUp.
+    // Il pinch (Invio o Spazio sul bottone a fuoco) non cambia più lo stato.
+    window.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' || e.key === ' ') && e.target === toggleButton) {
+        e.preventDefault();
+        return;
+      }
+      if (e.key !== 'ArrowUp' || e.repeat) return;
+      e.preventDefault();
+      cambiaStato();
+    });
+
+    function drawButtonCanvas() {
+      const ctx = buttonCtx;
+      ctx.clearRect(0, 0, LAYER_SIZE, LAYER_SIZE);
+      ctx.beginPath();
+      ctx.arc(256, 256, 200, 0, Math.PI * 2);
+      ctx.fillStyle = is_on ? 'rgba(0, 51, 17, 0.88)' : 'rgba(34, 34, 34, 0.88)';
+      ctx.fill();
+      ctx.lineWidth = 16;
+      ctx.strokeStyle = is_on ? '#00ff88' : '#ff4444';
+      ctx.stroke();
+      ctx.fillStyle = is_on ? '#00ff88' : '#ff4444';
+      ctx.font = 'bold 72px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(is_on ? 'ON' : 'OFF', 256, 256);
+    }
+
+    function compileShader(type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        throw new Error(gl.getShaderInfoLog(shader) || 'Shader non compilato');
+      }
+      return shader;
+    }
+
+    function setupQuadLayer(session) {
+      buttonCanvas = document.createElement('canvas');
+      buttonCanvas.width = LAYER_SIZE;
+      buttonCanvas.height = LAYER_SIZE;
+      buttonCtx = buttonCanvas.getContext('2d');
+
+      const glCanvas = document.createElement('canvas');
+      gl = glCanvas.getContext('webgl2', { xrCompatible: true, alpha: true });
+      if (!gl) {
+        throw new Error('WebGL2 non disponibile');
+      }
+
+      const vertex = compileShader(gl.VERTEX_SHADER, `#version 300 es
+        layout(location = 0) in vec2 aPos;
+        out vec2 vUv;
+        void main() {
+          vUv = aPos * 0.5 + 0.5;
+          gl_Position = vec4(aPos, 0.0, 1.0);
+        }`);
+      const fragment = compileShader(gl.FRAGMENT_SHADER, `#version 300 es
+        precision mediump float;
+        uniform sampler2D uTex;
+        in vec2 vUv;
+        out vec4 outColor;
+        void main() {
+          outColor = texture(uTex, vUv);
+        }`);
+      quadProgram = gl.createProgram();
+      gl.attachShader(quadProgram, vertex);
+      gl.attachShader(quadProgram, fragment);
+      gl.linkProgram(quadProgram);
+      if (!gl.getProgramParameter(quadProgram, gl.LINK_STATUS)) {
+        throw new Error(gl.getProgramInfoLog(quadProgram) || 'Programma WebGL non linkato');
+      }
+
+      quadVao = gl.createVertexArray();
+      gl.bindVertexArray(quadVao);
+      const buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        -1, -1,
+        3, -1,
+        -1, 3
+      ]), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+      buttonTexture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, buttonTexture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      framebuffer = gl.createFramebuffer();
+
+      return gl.makeXRCompatible().then(() => {
+        xrGlBinding = new XRWebGLBinding(session, gl);
+        return session.requestReferenceSpace('viewer');
+      }).then((viewerSpace) => {
+        quadLayer = xrGlBinding.createQuadLayer({
+          space: viewerSpace,
+          viewPixelWidth: LAYER_SIZE,
+          viewPixelHeight: LAYER_SIZE,
+          width: 0.3,
+          height: 0.3,
+          transform: new XRRigidTransform({ x: 0, y: 0, z: -1 }),
+          colorFormat: gl.RGBA,
+          clearOnAccess: false
+        });
+        session.updateRenderState({ layers: [quadLayer] });
+        drawButtonCanvas();
+        textureDirty = true;
+      });
+    }
+
+    function paintQuad(frame) {
+      const subImage = xrGlBinding.getSubImage(quadLayer, frame);
+      gl.bindTexture(gl.TEXTURE_2D, buttonTexture);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, buttonCanvas);
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+      gl.framebufferTexture2D(
+        gl.FRAMEBUFFER,
+        gl.COLOR_ATTACHMENT0,
+        gl.TEXTURE_2D,
+        subImage.colorTexture,
+        0
+      );
+      const viewport = subImage.viewport;
+      gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
+      gl.disable(gl.BLEND);
+      gl.disable(gl.DEPTH_TEST);
+      gl.disable(gl.SCISSOR_TEST);
+      gl.useProgram(quadProgram);
+      gl.bindVertexArray(quadVao);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, buttonTexture);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      textureDirty = false;
+    }
+
+    if (navigator.xr) {
+      navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
+        if (supported) {
+          xrButton.style.display = 'block';
+        }
+      });
+    }
+
+    xrButton.addEventListener('click', () => {
+      if (quest_xr_session || !navigator.xr) return;
+      navigator.xr.requestSession('immersive-ar', {
+        requiredFeatures: ['layers'],
+        optionalFeatures: ['hand-tracking']
+      }).then(onXRSessionStarted).catch((err) => {
+        debugText.innerText = 'Sessione Quest non avviata: ' + (err && err.message ? err.message : err);
+      });
+    });
+
+    function onXRSessionStarted(session) {
+      quest_xr_session = session;
+      layerError = null;
+      session.addEventListener('end', onXRSessionEnded);
+      setupQuadLayer(session).then(() => {
+        xrButton.style.display = 'none';
+        debugText.innerText = 'HUD sul quad layer, a un metro dagli occhi. Swipe forward per cambiare stato.';
+        session.requestAnimationFrame(onXRFrame);
+      }).catch((err) => {
+        layerError = 'Layer Quest non avviato: ' + (err && err.message ? err.message : err);
+        debugText.innerText = layerError;
+        session.end().catch(() => {});
+      });
+    }
+
+    function onXRSessionEnded() {
+      quest_xr_session = null;
+      quadLayer = null;
+      textureDirty = false;
+      gia_in_gesto = false;
+      xrButton.style.display = 'block';
+      debugText.innerText = layerError || 'Sessione Quest chiusa. Puoi rientrare.';
+      layerError = null;
+    }
+
+    function onXRFrame(time, frame) {
+      const session = frame.session;
+      if (session !== quest_xr_session) return;
+      session.requestAnimationFrame(onXRFrame);
+
+      let forward = false;
+      for (const inputSource of session.inputSources) {
+        const button = inputSource.hand && inputSource.gamepad && inputSource.gamepad.buttons[SWIPE_FORWARD_BUTTON];
+        if (button && button.pressed) forward = true;
+      }
+      if (forward) {
+        if (!gia_in_gesto) {
+          cambiaStato();
+          gia_in_gesto = true;
+        }
+      } else {
+        gia_in_gesto = false;
+      }
+
+      if (quadLayer && (textureDirty || quadLayer.needsRedraw)) {
+        paintQuad(frame);
+      }
+    }
+  </script>
+</body>
+</html>
