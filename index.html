@@ -89,6 +89,7 @@
     const LAYER_SIZE = 512;
     const PINCH_BUTTON = 0;
 
+    let audioCtx = null;
     let is_on = false;
     let pinchTenuto = false;
     let invioInCorso = false;
@@ -158,9 +159,31 @@
       }
     }
 
+    function suona(acceso) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      if (!audioCtx) audioCtx = new Ctx();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      const fine = acceso ? 0.14 : 0.18;
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(acceso ? 523 : 392, now);
+      osc.frequency.exponentialRampToValueAtTime(acceso ? 784 : 196, now + fine);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.16, now + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + fine);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + fine + 0.02);
+    }
+
     async function cambiaStato() {
       const voluto = !is_on;
       applica(voluto);
+      suona(voluto);
       if (!ponte.bridge) return;
       statoRichiesto = voluto;
       if (invioInCorso) return;
@@ -181,6 +204,7 @@
           } catch (err) {
             if (statoRichiesto === null) {
               applica(!richiesto);
+              suona(!richiesto);
               luciNonRaggiunte();
             }
           }
