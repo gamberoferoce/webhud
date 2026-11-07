@@ -1,0 +1,8 @@
+{
+  "host": "",
+  "port": 16021,
+  "token": "",
+  "secret": "",
+  "listenHost": "127.0.0.1",
+  "listenPort": 8787
+}

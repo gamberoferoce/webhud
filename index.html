@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>Universal HUD Button</title>
   <style>
-    /* --- STILE BASE: PC Desktop e Smartphone --- */
     body {
       margin: 0;
       background-color: #121212;
@@ -23,31 +22,29 @@
       text-align: center;
     }
 
-    /* Il cerchio contiene un cursore che non supera il bordo interno */
     .btn-toggle {
-      position: relative;
       width: 200px;
       height: 200px;
       border-radius: 50%;
-      border: 8px solid #e8e8e8;
-      background-color: #161616;
-      padding: 0;
-      cursor: default;
-      overflow: hidden;
+      border: 8px solid #333;
+      background-color: #330a0a;
+      color: #ff4444;
+      font-size: 24px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.3s ease;
       box-shadow: 0 0 20px rgba(0,0,0,0.5);
     }
 
-    #cursor {
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      width: 18%;
-      height: 18%;
-      border-radius: 50%;
-      background-color: #ffffff;
-      box-shadow: 0 0 16px #ffffff;
-      transform: translate(-50%, -50%);
-      pointer-events: none;
+    .btn-toggle.state-on {
+      border-color: #00ff88;
+      background-color: #003311;
+      color: #00ff88;
+      box-shadow: 0 0 30px #00ff88;
+    }
+
+    #debug-text {
+      margin-top: 24px;
     }
 
     #quest-xr-btn {
@@ -58,20 +55,20 @@
       border: none;
       border-radius: 8px;
       cursor: pointer;
-      display: none; /* Visibile solo se rileva supporto WebXR (Quest) */
+      display: none;
     }
 
-    /* --- STILE SPECIFICO: Meta Ray-Ban Display (600x600) --- */
     @media (max-width: 600px) and (max-height: 600px) and (aspect-ratio: 1/1) {
       body {
-        background-color: #000000; /* Nero assoluto = Trasparente sulle lenti */
+        background-color: #000000;
       }
       .btn-toggle {
-        width: 300px; /* Più grande e centrato per l'HUD degli occhiali */
+        width: 300px;
         height: 300px;
+        font-size: 28px;
       }
       #quest-xr-btn {
-        display: none !important; /* Inutile sugli occhiali */
+        display: none !important;
       }
     }
   </style>
@@ -79,27 +76,23 @@
 <body>
 
   <div id="hud-container">
-    <button id="toggle-button" class="btn-toggle" type="button" aria-label="Cursore">
-      <span id="cursor"></span>
-    </button>
-    <p id="debug-text">Il cursore parte dal centro e si muove fino al bordo</p>
+    <button id="toggle-button" class="btn-toggle" type="button">OFF</button>
+    <p id="debug-text">Pinch per accendere o spegnere</p>
   </div>
 
-  <!-- Pulsante di attivazione AR (Appare solo su Meta Quest) -->
   <button id="quest-xr-btn">ENTRA IN MODALITÀ QUEST HUD (AR)</button>
 
   <script>
     const toggleButton = document.getElementById('toggle-button');
-    const cursor = document.getElementById('cursor');
     const debugText = document.getElementById('debug-text');
     const xrButton = document.getElementById('quest-xr-btn');
 
     const LAYER_SIZE = 512;
-    const PASSO = 0.25;
+    const PINCH_BUTTON = 0;
 
-    let cx = 0;
-    let cy = 0;
-    let direzioneTenuta = null;
+    let is_on = false;
+    let richiesta = false;
+    let pinchTenuto = false;
     let quest_xr_session = null;
     let layerError = null;
 
@@ -114,78 +107,101 @@
     let buttonCtx = null;
     let textureDirty = false;
 
-    // y positivo verso il basso, come sullo schermo. 1 = il cursore tocca il bordo.
-    const DIREZIONI = {
-      forward: [0, -1],
-      right: [1, 0],
-      backward: [0, 1],
-      left: [-1, 0]
-    };
+    const ponte = leggiPonte();
 
-    const TASTI = {
-      ArrowUp: 'forward',
-      ArrowRight: 'right',
-      ArrowDown: 'backward',
-      ArrowLeft: 'left'
-    };
-
-    // oculus-hand: 5 sinistra, 6 destra, 7 swipe-forward, 8 indietro.
-    const PULSANTI_QUEST = {
-      5: 'left',
-      6: 'right',
-      7: 'forward',
-      8: 'backward'
-    };
-
-    function muoviCursore(dx, dy) {
-      cx += dx * PASSO;
-      cy += dy * PASSO;
-      const len = Math.hypot(cx, cy);
-      if (len > 1) {
-        cx /= len;
-        cy /= len;
+    function leggiPonte() {
+      const params = new URLSearchParams(location.search);
+      if (params.has('bridge')) localStorage.setItem('nanoleafBridge', params.get('bridge').trim());
+      if (params.has('k')) localStorage.setItem('nanoleafKey', params.get('k').trim());
+      if (params.has('bridge') || params.has('k')) {
+        params.delete('bridge');
+        params.delete('k');
+        const resto = params.toString();
+        history.replaceState(null, '', location.pathname + (resto ? '?' + resto : '') + location.hash);
       }
-      aggiornaCursore();
+      return {
+        bridge: (localStorage.getItem('nanoleafBridge') || '').replace(/\/+$/, ''),
+        key: localStorage.getItem('nanoleafKey') || ''
+      };
     }
 
-    function aggiornaCursore() {
-      const max = (toggleButton.clientWidth - cursor.offsetWidth) / 2;
-      cursor.style.transform = 'translate(calc(-50% + ' + (cx * max) + 'px), calc(-50% + ' + (cy * max) + 'px))';
+    function applica(acceso) {
+      is_on = !!acceso;
+      toggleButton.classList.toggle('state-on', is_on);
+      toggleButton.textContent = is_on ? 'ON' : 'OFF';
+      debugText.textContent = is_on ? 'Stato: ATTIVO' : 'Stato: DISATTIVATO';
       if (quadLayer) {
         drawButtonCanvas();
         textureDirty = true;
       }
     }
 
+    function luciNonRaggiunte() {
+      debugText.textContent = 'Luci non raggiunte';
+    }
+
+    async function leggiStatoLuci() {
+      if (!ponte.bridge) return;
+      try {
+        const url = ponte.bridge + '/state?k=' + encodeURIComponent(ponte.key);
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('stato');
+        const data = await res.json();
+        applica(data.on);
+      } catch (err) {
+        luciNonRaggiunte();
+      }
+    }
+
+    async function cambiaStato() {
+      if (richiesta) return;
+      const voluto = !is_on;
+      if (!ponte.bridge) {
+        applica(voluto);
+        return;
+      }
+      richiesta = true;
+      try {
+        const res = await fetch(ponte.bridge + '/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ on: voluto, k: ponte.key })
+        });
+        if (!res.ok) throw new Error('toggle');
+        const data = await res.json();
+        applica(data.on);
+      } catch (err) {
+        luciNonRaggiunte();
+      } finally {
+        richiesta = false;
+      }
+    }
+
+    toggleButton.addEventListener('click', cambiaStato);
+
     window.addEventListener('keydown', (e) => {
       if (e.repeat) return;
-      const id = TASTI[e.key];
-      if (!id) return;
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      if (e.target === xrButton) return;
       e.preventDefault();
-      const d = DIREZIONI[id];
-      muoviCursore(d[0], d[1]);
+      cambiaStato();
     });
-
-    window.addEventListener('resize', aggiornaCursore);
 
     function drawButtonCanvas() {
       const ctx = buttonCtx;
       ctx.clearRect(0, 0, LAYER_SIZE, LAYER_SIZE);
       ctx.beginPath();
       ctx.arc(256, 256, 200, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(22, 22, 22, 0.88)';
+      ctx.fillStyle = is_on ? 'rgba(0, 51, 17, 0.88)' : 'rgba(51, 10, 10, 0.88)';
       ctx.fill();
       ctx.lineWidth = 16;
-      ctx.strokeStyle = '#e8e8e8';
+      ctx.strokeStyle = is_on ? '#00ff88' : '#ff4444';
       ctx.stroke();
-
-      const innerRadius = 200 - 8;
-      const cursorRadius = innerRadius * 0.18;
-      const maxOffset = innerRadius - cursorRadius;
-      ctx.beginPath();
-      ctx.arc(256 + cx * maxOffset, 256 + cy * maxOffset, cursorRadius, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
+      ctx.fillStyle = is_on ? '#00ff88' : '#ff4444';
+      ctx.font = 'bold 72px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(is_on ? 'ON' : 'OFF', 256, 256);
     }
 
     function compileShader(type, source) {
@@ -316,7 +332,7 @@
         requiredFeatures: ['layers'],
         optionalFeatures: ['hand-tracking']
       }).then(onXRSessionStarted).catch((err) => {
-        debugText.innerText = 'Sessione Quest non avviata: ' + (err && err.message ? err.message : err);
+        debugText.textContent = 'Sessione Quest non avviata: ' + (err && err.message ? err.message : err);
       });
     });
 
@@ -326,11 +342,11 @@
       session.addEventListener('end', onXRSessionEnded);
       setupQuadLayer(session).then(() => {
         xrButton.style.display = 'none';
-        debugText.innerText = 'HUD sul quad layer. Il cursore si muove fino al bordo.';
+        debugText.textContent = 'HUD sul quad layer, a un metro dagli occhi. Pinch per accendere o spegnere.';
         session.requestAnimationFrame(onXRFrame);
       }).catch((err) => {
         layerError = 'Layer Quest non avviato: ' + (err && err.message ? err.message : err);
-        debugText.innerText = layerError;
+        debugText.textContent = layerError;
         session.end().catch(() => {});
       });
     }
@@ -339,9 +355,9 @@
       quest_xr_session = null;
       quadLayer = null;
       textureDirty = false;
-      direzioneTenuta = null;
+      pinchTenuto = false;
       xrButton.style.display = 'block';
-      debugText.innerText = layerError || 'Sessione Quest chiusa. Puoi rientrare.';
+      debugText.textContent = layerError || 'Sessione Quest chiusa. Puoi rientrare.';
       layerError = null;
     }
 
@@ -350,26 +366,20 @@
       if (session !== quest_xr_session) return;
       session.requestAnimationFrame(onXRFrame);
 
-      const premuti = [];
+      let pinch = false;
       for (const inputSource of session.inputSources) {
-        if (!inputSource.hand || !inputSource.gamepad) continue;
-        const buttons = inputSource.gamepad.buttons;
-        for (const index in PULSANTI_QUEST) {
-          const button = buttons[index];
-          if (button && button.pressed) premuti.push(PULSANTI_QUEST[index]);
-        }
+        const button = inputSource.hand && inputSource.gamepad && inputSource.gamepad.buttons[PINCH_BUTTON];
+        if (button && button.pressed) pinch = true;
       }
-      const nuova = premuti.length ? premuti[0] : null;
-      if (nuova && nuova !== direzioneTenuta) {
-        const d = DIREZIONI[nuova];
-        muoviCursore(d[0], d[1]);
-      }
-      direzioneTenuta = nuova;
+      if (pinch && !pinchTenuto) cambiaStato();
+      pinchTenuto = pinch;
 
       if (quadLayer && (textureDirty || quadLayer.needsRedraw)) {
         paintQuad(frame);
       }
     }
+
+    leggiStatoLuci();
   </script>
 </body>
 </html>
