@@ -8,6 +8,7 @@ Il token resta in bridge/config.json e non va nel repository.
 """
 
 import hmac
+import http.client
 import json
 import secrets
 import socket
@@ -258,17 +259,50 @@ def pair(host):
     return 0
 
 
+_nano_lock = threading.Lock()
+_nano_conn = None
+_nano_target = None
+
+
+def nanoleaf_call(config, method, path, payload=None):
+    global _nano_conn, _nano_target
+    host = config["host"]
+    port = int(config.get("port") or NANOLEAF_PORT)
+    body = None
+    headers = {"Connection": "keep-alive"}
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    url = "/api/v1/%s%s" % (config["token"], path)
+    with _nano_lock:
+        conn = _nano_conn
+        if conn is None or _nano_target != (host, port):
+            if conn is not None:
+                conn.close()
+            conn = http.client.HTTPConnection(host, port, timeout=4)
+            _nano_conn = conn
+            _nano_target = (host, port)
+        try:
+            conn.request(method, url, body=body, headers=headers)
+            response = conn.getresponse()
+            data = response.read()
+            return response.status, data
+        except Exception:
+            conn.close()
+            _nano_conn = None
+            _nano_target = None
+            raise
+
+
 def nanoleaf_on(config):
-    url = "http://%s:%s/api/v1/%s/state/on" % (config["host"], config.get("port") or NANOLEAF_PORT, config["token"])
-    status, body = http_json("GET", url)
+    status, body = nanoleaf_call(config, "GET", "/state/on")
     if status != 200:
         raise RuntimeError("lettura %s" % status)
     return bool(json.loads(body.decode("utf-8")).get("value"))
 
 
 def nanoleaf_set(config, acceso):
-    url = "http://%s:%s/api/v1/%s/state" % (config["host"], config.get("port") or NANOLEAF_PORT, config["token"])
-    status, _body = http_json("PUT", url, {"on": {"value": bool(acceso)}})
+    status, _body = nanoleaf_call(config, "PUT", "/state", {"on": {"value": bool(acceso)}})
     if status not in (200, 204):
         raise RuntimeError("scrittura %s" % status)
     return bool(acceso)

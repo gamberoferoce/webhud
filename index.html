@@ -32,7 +32,6 @@
       font-size: 24px;
       font-weight: bold;
       cursor: pointer;
-      transition: all 0.3s ease;
       box-shadow: 0 0 20px rgba(0,0,0,0.5);
     }
 
@@ -91,8 +90,9 @@
     const PINCH_BUTTON = 0;
 
     let is_on = false;
-    let richiesta = false;
     let pinchTenuto = false;
+    let invioInCorso = false;
+    let statoRichiesto = null;
     let quest_xr_session = null;
     let layerError = null;
 
@@ -159,26 +159,34 @@
     }
 
     async function cambiaStato() {
-      if (richiesta) return;
       const voluto = !is_on;
-      if (!ponte.bridge) {
-        applica(voluto);
-        return;
-      }
-      richiesta = true;
+      applica(voluto);
+      if (!ponte.bridge) return;
+      statoRichiesto = voluto;
+      if (invioInCorso) return;
+      invioInCorso = true;
       try {
-        const res = await fetch(ponte.bridge + '/toggle', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ on: voluto, k: ponte.key })
-        });
-        if (!res.ok) throw new Error('toggle');
-        const data = await res.json();
-        applica(data.on);
-      } catch (err) {
-        luciNonRaggiunte();
+        while (statoRichiesto !== null) {
+          const richiesto = statoRichiesto;
+          statoRichiesto = null;
+          try {
+            const res = await fetch(ponte.bridge + '/toggle', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ on: richiesto, k: ponte.key })
+            });
+            if (!res.ok) throw new Error('toggle');
+            const data = await res.json();
+            if (statoRichiesto === null && data.on !== is_on) applica(data.on);
+          } catch (err) {
+            if (statoRichiesto === null) {
+              applica(!richiesto);
+              luciNonRaggiunte();
+            }
+          }
+        }
       } finally {
-        richiesta = false;
+        invioInCorso = false;
       }
     }
 
