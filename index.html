@@ -67,7 +67,7 @@
       box-shadow: 0 0 30px #4da3ff;
     }
 
-    .btn-toggle.state-pinch {
+    .btn-toggle.state-tap {
       border-color: #c56bff;
       background-color: #240833;
       color: #c56bff;
@@ -105,7 +105,7 @@
 
   <div id="hud-container">
     <button id="toggle-button" class="btn-toggle" type="button">—</button>
-    <p id="debug-text">Forward rosso, right giallo, backward verde, left blu, pinch viola</p>
+    <p id="debug-text">Forward rosso, right giallo, backward verde, left blu, thumb tap viola</p>
   </div>
 
   <!-- Pulsante di attivazione AR (Appare solo su Meta Quest) -->
@@ -139,26 +139,25 @@
       right:    { label: 'RIGHT',    color: '#ffd84a', fill: 'rgba(51, 40, 0, 0.88)' },
       backward: { label: 'BACKWARD', color: '#00ff88', fill: 'rgba(0, 51, 17, 0.88)' },
       left:     { label: 'LEFT',     color: '#4da3ff', fill: 'rgba(0, 24, 51, 0.88)' },
-      pinch:    { label: 'PINCH',    color: '#c56bff', fill: 'rgba(36, 8, 51, 0.88)' }
+      tap:      { label: 'THUMB TAP', color: '#c56bff', fill: 'rgba(36, 8, 51, 0.88)' }
     };
 
-    // Occhiali: le direzioni della Neural Band arrivano come frecce, il pinch come Invio o Spazio.
+    // Occhiali: le direzioni della Neural Band arrivano come frecce.
+    // Il thumb tap non ha un tasto suo: sugli occhiali la pagina non lo riceve.
     const TASTI = {
       ArrowUp: 'forward',
       ArrowRight: 'right',
       ArrowDown: 'backward',
-      ArrowLeft: 'left',
-      Enter: 'pinch',
-      ' ': 'pinch'
+      ArrowLeft: 'left'
     };
 
-    // oculus-hand: 0 pinch, 5 sinistra, 6 destra, 7 swipe-forward, 8 indietro.
+    // oculus-hand: 5 sinistra, 6 destra, 7 swipe-forward, 8 indietro, 9 thumb tap.
     const PULSANTI_QUEST = {
-      0: 'pinch',
       5: 'left',
       6: 'right',
       7: 'forward',
-      8: 'backward'
+      8: 'backward',
+      9: 'tap'
     };
 
     function impostaGesto(id) {
@@ -178,7 +177,6 @@
       if (e.repeat) return;
       const id = TASTI[e.key];
       if (!id) return;
-      if ((e.key === 'Enter' || e.key === ' ') && e.target === xrButton) return;
       e.preventDefault();
       impostaGesto(id);
     });
