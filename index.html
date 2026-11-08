@@ -137,7 +137,7 @@
     let textureDirty = false;
 
     const PONTE_PUBBLICO = {
-      bridge: 'https://predict-kind-congressional-prime.trycloudflare.com',
+      bridge: 'https://deployment-boost-option-assumption.trycloudflare.com',
       key: 'vOSKiOKp8mDz_WNQR7o9by4R'
     };
 
@@ -153,8 +153,13 @@
         const resto = params.toString();
         history.replaceState(null, '', location.pathname + (resto ? '?' + resto : '') + location.hash);
       }
+      let bridge = localStorage.getItem('nanoleafBridge') || '';
+      if (!params.has('bridge') && bridge.includes('trycloudflare.com') && bridge.replace(/\/+$/, '') !== PONTE_PUBBLICO.bridge) {
+        localStorage.removeItem('nanoleafBridge');
+        bridge = '';
+      }
       return {
-        bridge: (localStorage.getItem('nanoleafBridge') || PONTE_PUBBLICO.bridge).replace(/\/+$/, ''),
+        bridge: (bridge || PONTE_PUBBLICO.bridge).replace(/\/+$/, ''),
         key: localStorage.getItem('nanoleafKey') || PONTE_PUBBLICO.key
       };
     }
